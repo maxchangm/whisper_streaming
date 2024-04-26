@@ -390,23 +390,40 @@ class HypothesisBuffer:
         Returns:
         - A list of committed transcription segments.
         """
-        commit = []
+        committed_segments = (
+            []
+        )  # List to hold segments that are confirmed and ready to be committed
+        # Iterate through the new buffer to check each segment against the main buffer
         while self.new:
-            na, nb, nt = self.new[0]
+            start_time, end_time, text = self.new[
+                0
+            ]  # Destructure the first segment tuple from new segments
             if len(self.buffer) == 0:
-                break
-            if nt == self.buffer[0][2]:
-                commit.append((na, nb, nt))
-                self.last_commited_word = nt
-                self.last_commited_time = nb
-                self.buffer.pop(0)
-                self.new.pop(0)
+                break  # Exit if there are no segments in the main buffer to compare against
+
+            # Check if the text from the new segment matches the text from the first segment in the main buffer
+            # If there is a match, add the segment to the list of committed segments and remove it from the main buffer
+            if text == self.buffer[0][2]:
+                committed_segments.append(
+                    (start_time, end_time, text)
+                )  # Add the matching segment to the list of committed segments
+                self.last_commited_word = (
+                    text  # Update the last committed word to the current text
+                )
+                self.last_commited_time = end_time  # Update the last committed time to the end time of the current segment
+                self.buffer.pop(0)  # Remove the matched segment from the main buffer
+                self.new.pop(0)  # Remove the processed segment from the new buffer
             else:
-                break
-        self.buffer = self.new
-        self.new = []
-        self.commited_in_buffer.extend(commit)
-        return commit
+                break  # Stop processing if there is no match
+
+            self.buffer = (
+                self.new
+            )  # Reset the main buffer to include only unprocessed new segments
+            self.new = []  # Clear the new segments buffer
+            self.commited_in_buffer.extend(
+                committed_segments
+            )  # Extend the committed in buffer with the newly committed segments
+            return committed_segments  # Return the list of newly committed segments
 
     def pop_commited(self, time):
         """
@@ -505,30 +522,71 @@ class OnlineASRProcessor:
         """Runs on the current audio buffer.
         Returns: a tuple (beg_timestamp, end_timestamp, "text"), or (None, None, "").
         The non-emty text is confirmed (committed) partial transcript.
+
+        Processes the current audio buffer and handles the transcription process,
+        managing the cycle of confirming or rejecting transcription hypotheses.
+
+        - Retrieves a prompt and its context from the transcript history to maintain continuity.
+        - Transcribes the current audio buffer using the ASR model.
+        - Converts raw ASR output into structured data with timestamps.
+        - Inserts these data into the hypothesis buffer for comparison and potential commitment.
+        - Retrieves and logs any uncommitted text, which is crucial for debugging and understanding the parts of the audio not yet finalized.
+        - Manages the buffer by committing confirmed transcripts and reporting the status of transcription, which includes completed and in-process text.
+        - Adjusts the audio buffer based on trimming settings to optimize memory usage and processing time.
+
+        This method is central to the operation of the ASR system, ensuring that audio is processed efficiently,
+        transcription accuracy is maintained, and resources are managed effectively. It contributes to the ASR process by
+        dynamically managing audio and text data, ensuring that only accurate, confirmed transcriptions are forwarded
+        to the next stages of the application or stored.
         """
 
+        """ Generate a prompt based on previously confirmed text to maintain contextual relevance in transcription. """
         prompt, non_prompt = self.prompt()
         logger.debug(f"PROMPT: {prompt}")
         logger.debug(f"CONTEXT: {non_prompt}")
         logger.debug(
             f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}"
         )
+
+        """Transcribe the current audio buffer using the provided ASR model with the generated prompt for context."""
         res = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
 
-        # transform to [(beg,end,"word1"), ...]
+        """ # Convert the raw transcription results into structured data with timestamps for each word. 
+        Transform to [(beg,end,"word1"), ...] """
         tsw = self.asr.ts_words(res)
 
+        """ Insert these timestamped words into the hypothesis buffer to check against previously stored data. """
         self.transcript_buffer.insert(tsw, self.buffer_time_offset)
-        o = self.transcript_buffer.flush()
-        self.commited.extend(o)
-        completed = self.to_flush(o)
+
+        """ Attempt to commit words from the hypothesis buffer that are confirmed by new input."""
+        committedSegments = self.transcript_buffer.flush()
+        self.commited.extend(committedSegments)
+
+        logger.info(
+            f"Current commited text: {[(t[2], t[0], t[1]) for t in self.commited]}"
+        )
+
+        unconfirmed_text = (
+            self.transcript_buffer.complete()
+        )  # Retrieves uncommitted text from the buffer
+        if unconfirmed_text:
+            logger.debug(
+                f"UNCONFIRMED TEXT: {[(t[2], t[0], t[1]) for t in unconfirmed_text]}"
+            )
+
+        """ Prepare the committed text for output by combining timestamped segments into a single formatted string. """
+        completed = self.to_flush(committedSegments)
         logger.debug(f">>>>COMPLETE NOW: {completed}")
+
+        """ Also prepare the remaining unconfirmed text for possible debugging or further processing."""
         the_rest = self.to_flush(self.transcript_buffer.complete())
         logger.debug(f"INCOMPLETE: {the_rest}")
 
         # there is a newly confirmed text
-
-        if o and self.buffer_trimming_way == "sentence":  # trim the completed sentences
+        """ Manage the audio buffer based on the specified trimming strategy to optimize memory usage and performance."""
+        if (
+            committedSegments and self.buffer_trimming_way == "sentence"
+        ):  # trim the completed sentences
             if (
                 len(self.audio_buffer) / self.SAMPLING_RATE > self.buffer_trimming_sec
             ):  # longer than this
@@ -539,6 +597,7 @@ class OnlineASRProcessor:
         else:
             s = 30  # if the audio buffer is longer than 30s, trim it
 
+        """Trim the buffer if it exceeds the specified threshold, ensuring efficient processing."""
         if len(self.audio_buffer) / self.SAMPLING_RATE > s:
             self.chunk_completed_segment(res)
 
@@ -555,7 +614,9 @@ class OnlineASRProcessor:
         logger.debug(
             f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}"
         )
-        return self.to_flush(o)
+
+        """ Return the formatted, confirmed text for this iteration."""
+        return self.to_flush(committedSegments)
 
     def chunk_completed_sentence(self):
         if self.commited == []:
