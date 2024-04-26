@@ -304,13 +304,27 @@ class OpenaiApiASR(ASRBase):
 class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
+
+        # The variables together help manage the dynamic data of transcribed audio, ensuring that the ASR process is efficient,
+        # accurate, and capable of handling real-time audio streams effectively. They allow the buffer to dynamically adjust
+        # and commit data based on ongoing analyses and comparisons, contributing crucially to the accuracy and reliability of the ASR output.
+
+        # List to store segments that have been fully processed and confirmed as accurate.
         self.commited_in_buffer = []
+
+        # Temporary storage for segments that are currently being processed but not yet confirmed.
         self.buffer = []
+
+        # Stores new transcription segments that are pending processing to check against the buffer for confirmation.
         self.new = []
 
+        # Tracks the timestamp of the last committed transcription to help manage the buffer's state and ensure continuity.
         self.last_commited_time = 0
+
+        # Stores the last committed word for reference, which can be used to optimize processing or resolve ambiguities in speech recognition.
         self.last_commited_word = None
 
+        # Log file for debugging and tracking the internal state and decisions of the buffer management.
         self.logfile = logfile
 
     def insert(self, new, offset):
@@ -323,10 +337,10 @@ class HypothesisBuffer:
             for segment_start, segment_end, t in new
         ]
 
-        # Update the attribute self.new to only include entries from the modified 'new' list where the start time 'a' is greater than the last committed time minus 0.1 seconds.
+        # Update the attribute self.new to only include entries from the modified 'new' list where the start time 'segment_start' is greater than the last committed time minus 0.1 seconds.
         # This ensures that the buffer only contains new words not yet committed, preventing redundant processing of words that have already been considered in the transcription.
         # Filtering out words that occur too close to or before the last committed time helps maintain the integrity of the transcription process by avoiding duplicate entries.# Filter new entries to only include words that occur after the last committed word's time
-        # Update the attribute self.new to a new list that contains only the tuples (a, b, t) from the modified new list where the start time a of each tuple is greater than last_commited_time minus 0.1 seconds.
+        # Update the attribute self.new to a new list that contains only the tuples (segment_start, segment_end, t) from the modified new list where the start time segment_start of each tuple is greater than last_commited_time minus 0.1 seconds.
         self.new = [
             (segment_start, segment_end, t)
             for segment_start, segment_end, t in new
@@ -361,15 +375,26 @@ class HypothesisBuffer:
                             break
 
     def flush(self):
-        # returns commited chunk = the longest common prefix of 2 last inserts.
+        """
+        Processes the buffer to commit the longest common prefix of the two most recent inserts.
+        This method finalizes and commits segments of transcription where there is agreement between 'new' and 'buffer'.
 
+        Why it's needed:
+        - Ensures transcription accuracy by committing only those segments that are confirmed by subsequent data.
+        - Helps maintain a clean buffer by removing processed segments, which contributes to managing memory and improving processing speed.
+
+        How it contributes:
+        - By confirming and committing data, it aids in producing a final transcription output that is accurate and reliable.
+        - Directly influences the overall ASR process by integrating real-time data validation and refinement of transcription hypotheses.
+
+        Returns:
+        - A list of committed transcription segments.
+        """
         commit = []
         while self.new:
             na, nb, nt = self.new[0]
-
             if len(self.buffer) == 0:
                 break
-
             if nt == self.buffer[0][2]:
                 commit.append((na, nb, nt))
                 self.last_commited_word = nt
@@ -384,14 +409,35 @@ class HypothesisBuffer:
         return commit
 
     def pop_commited(self, time):
+        """
+        Removes entries from the committed buffer that are older or equal to the specified time.
+
+        Why it's needed:
+        - Helps manage memory by clearing out old data that is no longer needed.
+        - Prevents outdated data from interfering with new data processing, which is crucial for maintaining transcription accuracy.
+
+        How it contributes:
+        - Supports the real-time processing aspect of the ASR system by keeping the buffer updated and relevant to the current audio processing context.
+        """
         while self.commited_in_buffer and self.commited_in_buffer[0][1] <= time:
             self.commited_in_buffer.pop(0)
 
     def complete(self):
+        """
+        Returns the current buffer without modifying it.
+
+        Why it's needed:
+        - Allows for retrieval of the current state of transcription without committing it, useful for checks and intermediate processing steps.
+
+        How it contributes:
+        - Provides a mechanism to access the current transcription hypotheses without affecting the buffer's state, essential for debugging and real-time updates in the ASR process.
+
+        Returns:
+        - The current buffer as a list of transcription segments.
+        """
         return self.buffer
 
 
-# explain the OnlineASRProcessor class and how it implements local agreement policy:
 # it is a class that implements the local agreement policy
 # it has a method to insert the audio chunk
 # it has a method to process the audio chunk
@@ -452,7 +498,6 @@ class OnlineASRProcessor:
             t for _, _, t in non_prompt
         )
 
-    # how does this method work? why is it needed?
     # it is a method that returns a tuple (prompt, context), where "prompt" is a 200-character suffix of commited text that is inside of the scrolled away part of audio buffer.
     # "context" is the commited text that is inside the audio buffer. It is transcribed again and skipped. It is returned only for debugging and logging reasons.
     # it is used by the prompt method
@@ -873,6 +918,7 @@ if __name__ == "__main__":
 
     beg = args.start_at
     start = time.time() - beg
+    logger.info("Start time is: %2.2f seconds" % start)
 
     def output_transcript(o, now=None):
         # output format in stdout is like:
@@ -937,11 +983,17 @@ if __name__ == "__main__":
         end = 0
         while True:
             now = time.time() - start
+            logger.info("Now time is: %2.2f seconds" % now)
+            logger.info("End time is: %2.2f seconds" % end)
+
             if now < end + min_chunk:
+                logger.info("Sleeping for %2.2f seconds" % (min_chunk + end - now))
                 time.sleep(min_chunk + end - now)
             end = time.time() - start
+            logger.info("End time is: %2.2f seconds" % end)
             a = load_audio_chunk(audio_path, beg, end)
             beg = end
+            logger.info("Beg time is now end time: %2.2f seconds" % beg)
             online.insert_audio_chunk(a)
 
             try:
