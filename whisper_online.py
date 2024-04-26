@@ -294,13 +294,13 @@ class OpenaiApiASR(ASRBase):
         self.task = "translate"
 
 
-# explain the hypothesisbuffer class:
-# it is a class that stores the transcription result and the audio buffer
-# it is used by OnlineASRProcessor class
-# it has methods to insert the audio chunk and flush the buffer
-# it has a method to complete the buffer
-# it has a method to pop the completed transcription
-# it has a method to flush the incomplete transcription
+"""
+The HypothesisBuffer serves as a specialized buffer that manages transcription segments or hypotheses during the ASR process. 
+It temporarily stores these hypotheses, checks them for consistency and accuracy against new incoming data, 
+and commits them to a final output once they are confirmed.
+"""
+
+
 class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
@@ -455,11 +455,19 @@ class HypothesisBuffer:
         return self.buffer
 
 
-# it is a class that implements the local agreement policy
-# it has a method to insert the audio chunk
-# it has a method to process the audio chunk
-# it has a method to flush the incomplete transcription
-# it has a method to finish the processing
+"""
+This class is responsible for managing the overall process of converting audio input into textual transcription. 
+It handles audio input, segments the audio for processing, 
+utilizes an automatic speech recognition (ASR) model to generate transcription hypotheses, 
+and manages these hypotheses through various stages of confirmation.
+
+The OnlineASRProcessor uses the HypothesisBuffer to store and manage unconfirmed text segments. 
+As new audio data is processed and transcribed, the OnlineASRProcessor feeds these new transcription results into the HypothesisBuffer. 
+The buffer then evaluates these new inputs, confirming them against existing data,
+and commits confirmed segments to the final transcription output. 
+This interaction ensures a dynamic and efficient handling of the transcription process, 
+where only validated text is outputted, minimizing errors and inaccuracies in real-time transcription.
+"""
 
 
 class OnlineASRProcessor:
