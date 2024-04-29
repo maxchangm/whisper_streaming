@@ -406,9 +406,9 @@ class HypothesisBuffer:
                 committed_segments.append(
                     (start_time, end_time, text)
                 )  # Add the matching segment to the list of committed segments
-                self.last_commited_word = (
-                    text  # Update the last committed word to the current text
-                )
+                self.last_commited_word = text  # Update the last committed word to the current text
+                
+
                 self.last_commited_time = end_time  # Update the last committed time to the end time of the current segment
                 self.buffer.pop(0)  # Remove the matched segment from the main buffer
                 self.new.pop(0)  # Remove the processed segment from the new buffer
