@@ -394,18 +394,15 @@ class HypothesisBuffer:
         # List to hold segments that are confirmed and ready to be committed
         # Iterate through the new buffer to check each segment against the main buffer
         while self.new:
-            start_time, end_time, text = self.new[
-                0
-            ]  # Destructure the first segment tuple from new segments
+            start_time, end_time, text = self.new[0]  # Destructure the first segment tuple from new segments
             if len(self.buffer) == 0:
                 break  # Exit if there are no segments in the main buffer to compare against
 
             # Check if the text from the new segment matches the text from the first segment in the main buffer
             # If there is a match, add the segment to the list of committed segments and remove it from the main buffer
             if text == self.buffer[0][2]:
-                committed_segments.append(
-                    (start_time, end_time, text)
-                )  # Add the matching segment to the list of committed segments
+                committed_segments.append((start_time, end_time, text))  # Add the matching segment to the list of committed segments
+                logger.info("Committed segment: " + committed_segments)
                 self.last_commited_word = text  # Update the last committed word to the current text
                 
 
