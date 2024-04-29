@@ -568,6 +568,8 @@ class OnlineASRProcessor:
 
         """ Attempt to commit words from the hypothesis buffer that are confirmed by new input."""
         committedSegments = self.transcript_buffer.flush()
+        if committedSegments is None:
+            committedSegments = []
         self.commited.extend(committedSegments)
 
         logger.info(
@@ -928,6 +930,12 @@ def set_logging(args, logger, other="_server"):
 
 if __name__ == "__main__":
 
+    # Step 1: Command Line Argument Parsing
+    # The script starts by defining an argument parser using `argparse.ArgumentParser`
+    # and setting up necessary command-line arguments such as `--model`, `--language`, etc.
+    # The provided arguments (`input_audio.wav`, `--model large-v3`, etc.) are parsed.
+    # These specify the configuration like the model size, language, backend, and various operational parameters.
+
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -968,6 +976,9 @@ if __name__ == "__main__":
     #        logging.basicConfig(format='whisper-%(levelname)s:%(name)s: %(message)s',
     #                            level=getattr(logging, args.log_level))
 
+    # Step 2: Logging Configuration
+    # The `set_logging` function is called to configure the logging based on the specified log level (defaults to `DEBUG` if not provided).
+    # This setup controls the output of log messages throughout the script.
     set_logging(args, logger)
 
     audio_path = args.audio_path
@@ -976,13 +987,34 @@ if __name__ == "__main__":
     duration = len(load_audio(audio_path)) / SAMPLING_RATE
     logger.info("Audio duration is: %2.2f seconds" % duration)
 
+    # Step 3: ASR System Initialization
+    # The `asr_factory` function is invoked with parsed arguments.
+    # This function decides which ASR backend to initialize based on the `--backend` argument.
+    # In your case, since `--backend faster-whisper` is specified, an instance of `FasterWhisperASR` is created.
+    # The `FasterWhisperASR` class initializes the Whisper model with the specified size (`large-v3`)
+    # and language (`yue`), along with setting up any specified options like voice activity detection (`--vad`).
+    # Step 4: Online ASR Processor Setup (inside asr_factory)
+    # An instance of `OnlineASRProcessor` is created using the initialized ASR model.
+    # The `OnlineASRProcessor` handles real-time audio processing, manages buffers, and coordinates the transcription process.
+    # Buffer trimming strategy and threshold are configured (`--buffer_trimming segment` and `--buffer_trimming_sec 2`).
     asr, online = asr_factory(args, logfile=logfile)
     min_chunk = args.min_chunk_size
 
     # load the audio into the LRU cache before we start the timer
+    # Step 5: Audio Loading and Processing
+    # The `load_audio` function loads the specified audio file (`input_audio.wav`) into memory.
+    # This function uses `librosa` to load the audio at a sampling rate of 16,000 Hz, which is suitable for the Whisper model.
+    # The audio is processed in chunks, with each chunk size determined by the `--min-chunk-size` parameter (1 second in your case).
+    # This means the script processes the audio in one-second intervals.
     a = load_audio_chunk(audio_path, 0, 1)
 
     # warm up the ASR because the very first transcribe takes much more time than the other
+    # Step 6: Transcription Loop
+    # For each audio chunk, the `OnlineASRProcessor` performs several operations:
+    #     - **Insert Audio Chunk**: The current audio chunk is added to the processor’s audio buffer.
+    #     - **Transcription Process**: The `process_iter` method is called to transcribe the current audio buffer, using the Whisper model.
+    # This method handles the transcription, manages hypothesis buffers, and commits confirmed transcription segments.
+    #     - **Output Transcription**: As transcription results are confirmed, they are output to the standard output or log, based on the logging configuration.
     asr.transcribe(a)
 
     beg = args.start_at
@@ -1012,6 +1044,9 @@ if __name__ == "__main__":
             # No text, so no output
             pass
 
+    # Step 7: Buffer Management
+    # Depending on the buffer trimming configuration, the audio and transcription buffers are managed to avoid overgrowth and to optimize memory usage.
+    # In your setup, the buffer is trimmed based on completed segments longer than 2 seconds.
     if args.offline:  ## offline mode processing (for testing/debugging)
         a = load_audio(audio_path)
         online.insert_audio_chunk(a)
@@ -1081,5 +1116,8 @@ if __name__ == "__main__":
                 break
         now = None
 
+    # Step 8: Completion
+    # Once all audio has been processed, any remaining unconfirmed or partially processed transcription data is handled by the `finish` method of `OnlineASRProcessor`,
+    # ensuring that no transcription data is lost at the end of the processing.
     o = online.finish()
     output_transcript(o, now=now)
