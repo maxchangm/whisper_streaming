@@ -390,9 +390,8 @@ class HypothesisBuffer:
         Returns:
         - A list of committed transcription segments.
         """
-        committed_segments = (
-            []
-        )  # List to hold segments that are confirmed and ready to be committed
+        committed_segments = []
+        # List to hold segments that are confirmed and ready to be committed
         # Iterate through the new buffer to check each segment against the main buffer
         while self.new:
             start_time, end_time, text = self.new[
@@ -416,13 +415,11 @@ class HypothesisBuffer:
             else:
                 break  # Stop processing if there is no match
 
-            self.buffer = (
-                self.new
-            )  # Reset the main buffer to include only unprocessed new segments
+            self.buffer = self.new
+            # Reset the main buffer to include only unprocessed new segments
             self.new = []  # Clear the new segments buffer
-            self.commited_in_buffer.extend(
-                committed_segments
-            )  # Extend the committed in buffer with the newly committed segments
+            self.commited_in_buffer.extend(committed_segments)
+            # Extend the committed in buffer with the newly committed segments
             return committed_segments  # Return the list of newly committed segments
 
     def pop_commited(self, time):
