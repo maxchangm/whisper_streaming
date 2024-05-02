@@ -58,63 +58,9 @@ class ASRBase:
         raise NotImplemented("must be implemented in the child class")
 
 
-# write comments for WhisperTimestampedASR class
-# it is a subclass of ASRBase class
-# it uses whisper_timestamped library as the backend. Initially, we tested the code on this backend. It worked, but slower than faster-whisper.
-# On the other hand, the installation for GPU could be easier.
-class WhisperTimestampedASR(ASRBase):
-    """Uses whisper_timestamped library as the backend. Initially, we tested the code on this backend. It worked, but slower than faster-whisper.
-    On the other hand, the installation for GPU could be easier.
-    """
-
-    sep = " "
-
-    def load_model(self, modelsize=None, cache_dir=None, model_dir=None):
-        import whisper
-        import whisper_timestamped
-        from whisper_timestamped import transcribe_timestamped
-
-        self.transcribe_timestamped = transcribe_timestamped
-        if model_dir is not None:
-            logger.debug("ignoring model_dir, not implemented")
-        return whisper.load_model(modelsize, download_root=cache_dir)
-
-    def transcribe(self, audio, init_prompt=""):
-        result = self.transcribe_timestamped(
-            self.model,
-            audio,
-            language=self.original_language,
-            initial_prompt=init_prompt,
-            verbose=None,
-            condition_on_previous_text=True,
-            **self.transcribe_kargs,
-        )
-        return result
-
-    def ts_words(self, r):
-        # return: transcribe result object to [(beg,end,"word1"), ...]
-        o = []
-        for s in r["segments"]:
-            for w in s["words"]:
-                t = (w["start"], w["end"], w["text"])
-                o.append(t)
-        return o
-
-    def segments_end_ts(self, res):
-        return [s["end"] for s in res["segments"]]
-
-    def use_vad(self):
-        self.transcribe_kargs["vad"] = True
-
-    def set_translate_task(self):
-        self.transcribe_kargs["task"] = "translate"
-
-
 # write comments for FasterWhisperASR class
 # it is a subclass of ASRBase class
 # it uses faster-whisper library as the backend. Works much faster, appx 4-times (in offline mode). For GPU, it requires installation with a specific CUDNN version.
-
-
 class FasterWhisperASR(ASRBase):
     """Uses faster-whisper library as the backend. Works much faster, appx 4-times (in offline mode). For GPU, it requires installation with a specific CUDNN version."""
 
@@ -199,108 +145,11 @@ class FasterWhisperASR(ASRBase):
         self.transcribe_kargs["task"] = "translate"
 
 
-class OpenaiApiASR(ASRBase):
-    """Uses OpenAI's Whisper API for audio transcription."""
-
-    def __init__(self, lan=None, temperature=0, logfile=sys.stderr):
-        self.logfile = logfile
-
-        self.modelname = "whisper-1"
-        self.original_language = (
-            None if lan == "auto" else lan
-        )  # ISO-639-1 language code
-        self.response_format = "verbose_json"
-        self.temperature = temperature
-
-        self.load_model()
-
-        self.use_vad_opt = False
-
-        # reset the task in set_translate_task
-        self.task = "transcribe"
-
-    def load_model(self, *args, **kwargs):
-        from openai import OpenAI
-
-        self.client = OpenAI()
-
-        self.transcribed_seconds = (
-            0  # for logging how many seconds were processed by API, to know the cost
-        )
-
-    def ts_words(self, segments):
-        no_speech_segments = []
-        if self.use_vad_opt:
-            for segment in segments.segments:
-                # TODO: threshold can be set from outside
-                if segment["no_speech_prob"] > 0.8:
-                    no_speech_segments.append(
-                        (segment.get("start"), segment.get("end"))
-                    )
-
-        o = []
-        for word in segments.words:
-            start = word.get("start")
-            end = word.get("end")
-            if any(s[0] <= start <= s[1] for s in no_speech_segments):
-                # print("Skipping word", word.get("word"), "because it's in a no-speech segment")
-                continue
-            o.append((start, end, word.get("word")))
-        return o
-
-    def segments_end_ts(self, res):
-        return [s["end"] for s in res.words]
-
-    def transcribe(self, audio_data, prompt=None, *args, **kwargs):
-        # Write the audio data to a buffer
-        buffer = io.BytesIO()
-        buffer.name = "temp.wav"
-        sf.write(buffer, audio_data, samplerate=16000, format="WAV", subtype="PCM_16")
-        buffer.seek(0)  # Reset buffer's position to the beginning
-
-        self.transcribed_seconds += math.ceil(
-            len(audio_data) / 16000
-        )  # it rounds up to the whole seconds
-
-        params = {
-            "model": self.modelname,
-            "file": buffer,
-            "response_format": self.response_format,
-            "temperature": self.temperature,
-            "timestamp_granularities": ["word", "segment"],
-        }
-        if self.task != "translate" and self.original_language:
-            params["language"] = self.original_language
-        if prompt:
-            params["prompt"] = prompt
-
-        if self.task == "translate":
-            proc = self.client.audio.translations
-        else:
-            proc = self.client.audio.transcriptions
-
-        # Process transcription/translation
-        transcript = proc.create(**params)
-        logger.debug(
-            f"OpenAI API processed accumulated {self.transcribed_seconds} seconds"
-        )
-
-        return transcript
-
-    def use_vad(self):
-        self.use_vad_opt = True
-
-    def set_translate_task(self):
-        self.task = "translate"
-
-
 """
 The HypothesisBuffer serves as a specialized buffer that manages transcription segments or hypotheses during the ASR process. 
 It temporarily stores these hypotheses, checks them for consistency and accuracy against new incoming data, 
 and commits them to a final output once they are confirmed.
 """
-
-
 class HypothesisBuffer:
 
     def __init__(self, logfile=sys.stderr):
@@ -462,8 +311,6 @@ and commits confirmed segments to the final transcription output.
 This interaction ensures a dynamic and efficient handling of the transcription process, 
 where only validated text is outputted, minimizing errors and inaccuracies in real-time transcription.
 """
-
-
 class OnlineASRProcessor:
 
     SAMPLING_RATE = 16000
@@ -546,9 +393,7 @@ class OnlineASRProcessor:
         prompt, non_prompt = self.prompt()
         logger.debug(f"PROMPT: {prompt}")
         logger.debug(f"CONTEXT: {non_prompt}")
-        logger.debug(
-            f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}"
-        )
+        logger.debug(f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}")
 
         """Transcribe the current audio buffer using the provided ASR model with the generated prompt for context."""
         res = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
@@ -566,9 +411,7 @@ class OnlineASRProcessor:
             committedSegments = []
         self.commited.extend(committedSegments)
 
-        logger.info(
-            f"Current commited text: {[(t[2], t[0], t[1]) for t in self.commited]}"
-        )
+        logger.info(f"Current commited text: {[(t[2], t[0], t[1]) for t in self.commited]}")
 
         unconfirmed_text = (
             self.transcript_buffer.complete()
@@ -862,27 +705,24 @@ def asr_factory(args, logfile=sys.stderr):
     Creates and configures an ASR and ASR Online instance based on the specified backend and arguments.
     """
     backend = args.backend
-    if backend == "openai-api":
-        logger.debug("Using OpenAI API.")
-        asr = OpenaiApiASR(lan=args.lan)
-    else:
-        if backend == "faster-whisper":
-            asr_cls = FasterWhisperASR
-        else:
-            asr_cls = WhisperTimestampedASR
 
-        # Only for FasterWhisperASR and WhisperTimestampedASR
-        size = args.model
-        t = time.time()
-        logger.info(f"Loading Whisper {size} model for {args.lan}...")
-        asr = asr_cls(
-            modelsize=size,
-            lan=args.lan,
-            cache_dir=args.model_cache_dir,
-            model_dir=args.model_dir,
-        )
-        e = time.time()
-        logger.info(f"done. It took {round(e-t,2)} seconds.")
+    if backend == "faster-whisper":
+        asr_cls = FasterWhisperASR
+    else:
+        raise Exception("Can only be faster whisper backend")
+
+    # Only for FasterWhisperASR and WhisperTimestampedASR
+    size = args.model
+    t = time.time()
+    logger.info(f"Loading Whisper {size} model for {args.lan}...")
+    asr = asr_cls(
+        modelsize=size,
+        lan=args.lan,
+        cache_dir=args.model_cache_dir,
+        model_dir=args.model_dir,
+    )
+    e = time.time()
+    logger.info(f"done. It took {round(e-t,2)} seconds.")
 
     # Apply common configurations
     if getattr(args, "vad", False):  # Checks if VAD argument is present and True
