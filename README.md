@@ -188,7 +188,7 @@ online.init()  # refresh if you're going to re-use the object for the next audio
 Client example:
 
 ```
-arecord -f S16_LE -c1 -r 16000 -t raw -D default | nc localhost 43001
+arecord -f S16_LE -c1 -r 16000 -t raw -D default | nc 0.0.0.0 43001
 ```
 
 - arecord sends realtime audio from a sound device (e.g. mic), in raw audio format -- 16000 sampling rate, mono channel, S16\_LE -- signed 16-bit integer low endian. (use the alternative to arecord that works for you)

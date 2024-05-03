@@ -341,7 +341,26 @@ class OnlineASRProcessor:
         self.commited = []
 
     def insert_audio_chunk(self, audio):
-        self.audio_buffer = np.append(self.audio_buffer, audio)
+        expected_length = len(audio) - len(audio) % 4  # Ensure the length is a multiple of 4
+        try:
+            # Convert byte data to numpy array of type float32
+            audio_data = np.frombuffer(audio[:expected_length], dtype=np.float32)
+            print("Conversion successful. Data type:", audio_data.dtype)  # Check data type after conversion
+            print("Data shape:", audio_data.shape)  # Check shape to understand the array structure
+            if np.any(np.isnan(audio_data)) or np.any(np.isinf(audio_data)):
+                print("Data contains NaN or Inf values")
+        except Exception as e:
+            print("Error converting audio chunk:", e)
+            return
+
+        # Append new audio data to the existing buffer
+        self.audio_buffer = np.append(self.audio_buffer, audio_data)
+        print("Updated audio buffer shape:", self.audio_buffer.shape)  # Debugging the shape after append
+
+        # Placeholder for further processing
+        # For debugging, you might want to log the range of values or similar statistics
+        if self.audio_buffer.size > 0:
+            print("Buffer stats - Min:", np.min(self.audio_buffer), "Max:", np.max(self.audio_buffer))
 
     def prompt(self):
         """Returns a tuple: (prompt, context), where "prompt" is a 200-character suffix of commited text that is inside of the scrolled away part of audio buffer.

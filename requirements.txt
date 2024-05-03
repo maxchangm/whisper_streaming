@@ -11,6 +11,7 @@ faster-whisper
 tokenizers==0.15
 fastapi
 uvicorn
+uvicorn[standard]
 scipy
 aiofile
 python-multipart
