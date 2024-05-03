@@ -1,4 +1,4 @@
-librosa 
+librosa==0.10.1
 soundfile
 whisper-timestamped @ git+https://github.com/linto-ai/whisper-timestamped
 openai
@@ -9,3 +9,8 @@ numpy
 whisper
 faster-whisper
 tokenizers==0.15
+fastapi
+uvicorn
+scipy
+aiofile
+python-multipart
