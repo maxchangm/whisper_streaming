@@ -11,6 +11,15 @@ import websockets
 import soundfile as sf
 import io
 
+import torch
+
+torch.cuda.empty_cache()
+print(torch.cuda.is_available())
+print(torch.cuda.device_count())
+print(torch.cuda.current_device())
+print(torch.cuda.get_device_properties(0))
+
+
 # Define constants
 SAMPLING_RATE = 16000  # in Hz
 FRAME_DURATION = 0.1  # in seconds
