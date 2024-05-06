@@ -14,7 +14,7 @@ function startWebSocket() {
   }
 
 
-    socket = new WebSocket('wss://a64f-23-23-58-79.ngrok-free.app/ws');
+    socket = new WebSocket('wss://5dd9-54-237-205-57.ngrok-free.app/ws');
 
     socket.onopen = function() {
         console.log('WebSocket connection established');

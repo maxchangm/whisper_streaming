@@ -1,10 +1,15 @@
 from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
-from whisper_online import FasterWhisperASR, OnlineASRProcessor
+from whisper_online import FasterWhisperASR, OnlineASRProcessor, create_tokenizer
 from fastapi.responses import RedirectResponse
 from fastapi import FastAPI, HTTPException, status
 import numpy as np
 from whisper_online_server import Connection, ServerProcessor
+import numpy as np
+import asyncio
+import websockets
+import soundfile as sf
+import io
 
 # Define constants
 SAMPLING_RATE = 16000  # in Hz
@@ -26,59 +31,33 @@ src_lan = "yue"
 
 # Initialize the ASR system
 asr = FasterWhisperASR(lan=src_lan, modelsize="large-v2")
+
 online = OnlineASRProcessor(asr)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    connection = WebSocketConnection(websocket)
-    processor = ServerProcessor(connection, online)
-    await processor.process()
-    await websocket.close()
+    try:
+        async for message in websocket:
+            if isinstance(message, bytes):
+                # Convert bytes to np.float32 array
+                # Assuming the incoming audio is in a common format like WAV
+                with io.BytesIO(message) as audio_buffer:
+                    # Read audio data as float32 directly
+                    data, samplerate = sf.read(audio_buffer, dtype='float32')
+                    if samplerate != OnlineASRProcessor.SAMPLING_RATE:
+                        raise ValueError(f"Expected samplerate {OnlineASRProcessor.SAMPLING_RATE}, but got {samplerate}")
 
-# @app.websocket("/ws")
-# async def websocket_endpoint(websocket: WebSocket):
-#     await websocket.accept()
-#     print("WebSocket connection accepted")
-#     online.init()
-#     print("ASR Processor initiated!")
-#     buffer = bytearray() 
-#     try:
-#         while True:
-#             data = await websocket.receive_bytes()  # Receive audio chunk as bytes
-#             buffer.extend(data)  # Add received data to the buffer
-#            # Process only if buffer has enough data to match a full frame
-#             while len(buffer) >= MIN_CHUNK_SIZE:
-#                 # Process the buffer in chunks of MIN_CHUNK_SIZE
-#                 chunk_data = buffer[:MIN_CHUNK_SIZE]
-#                 buffer = buffer[MIN_CHUNK_SIZE:]
-
-#                 # Convert bytes to audio format
-#                 audio = np.frombuffer(chunk_data, dtype=np.float32)
-#                 if audio.size == 0:
-#                     continue    
-#                 online.insert_audio_chunk(audio)
-#                 result = online.process_iter()
-#                 if result and result[2]:  # Ensure there is text to send back
-#                     await websocket.send_text(f"{result[0]} {result[1]} {result[2]}")
-#     except Exception as e:
-#         print(f"Error: {e}")
-#     except WebSocketDisconnect:
-#         print("WebSocket disconnected.")
-#         buffer.clear() 
-#     finally:
-#         final_output = online.finish()
-#         if final_output and final_output[2]:
-#             try:
-#                 await websocket.send_text(f"{final_output[0]} {final_output[1]} {final_output[2]}")
-#             except Exception as e:
-#                 print("Error sending final output:", e)
-#         await websocket.close()
-#         buffer.clear() 
-#         print("WebSocket connection closed")
-
-
-
+                # Process the float32 audio data
+                asr.insert_audio_chunk(data)
+                result = asr.process_iter()
+                await websocket.send(str(result))  # Send back the partial transcription
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        final_output = asr.finish()
+        await websocket.send(final_output)  # Send back the final transcription
+        await websocket.close()
 
 if __name__ == "__main__":
     import uvicorn

@@ -6,6 +6,7 @@ import argparse
 import os
 import logging
 import numpy as np
+from fastapi import FastAPI, WebSocket
 
 logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser()
@@ -32,30 +33,31 @@ import socket
 
 
 class Connection:
-    """it wraps conn object"""
+    def __init__(self, websocket: WebSocket):
+        self.websocket = websocket
 
-    PACKET_SIZE = 65536
+    async def send(self, message: str):
+        """Sends a text message to the client over the WebSocket connection.
 
-    def __init__(self, conn):
-        self.conn = conn
-        self.last_line = ""
+        Args:
+            message (str): The message to be sent.
+        """
+        await self.websocket.send_text(message)
 
-        self.conn.setblocking(True)
+    async def receive_audio_chunk(self):
+        """Receives audio data as bytes from the WebSocket connection.
 
-    def send(self, line):
-        """it doesn't send the same line twice, because it was problematic in online-text-flow-events"""
-        if line == self.last_line:
-            return
-        line_packet.send_one_line(self.conn, line)
-        self.last_line = line
-
-    def receive_lines(self):
-        in_line = line_packet.receive_lines(self.conn)
-        return in_line
-
-    def non_blocking_receive_audio(self):
-        r = self.conn.recv(self.PACKET_SIZE)
-        return r
+        Returns:
+            bytes: The audio data received from the client, or None if an error occurs.
+        """
+        try:
+            # This method will wait for a message from the client and return the data as bytes.
+            data = await self.websocket.receive_bytes()
+            return data
+        except Exception as e:
+            # If any exception occurs during reception, log or print the exception message and return None.
+            print(f"Error receiving data: {e}")
+            return None
 
 
 import io
@@ -65,80 +67,44 @@ import soundfile
 # wraps socket and ASR object, and serves one client connection.
 # next client should be served by a new instance of this object
 class ServerProcessor:
-
-    def __init__(self, c, online_asr_proc, min_chunk):
-        self.connection = c
+    def __init__(self, connection, online_asr_proc, min_chunk_size):
+        self.connection = connection
         self.online_asr_proc = online_asr_proc
-        self.min_chunk = min_chunk
+        self.min_chunk_size = min_chunk_size
+        self.last_end = None  # Used to ensure non-overlapping intervals for transcript segments
 
-        self.last_end = None
+    async def process(self):
+        """Process the audio stream using the ASR model and send results."""
+        self.online_asr_proc.init()
+        try:
+            while True:
+                audio = await self.connection.receive_audio_chunk()
+                if audio is None:  # If no audio is received, assume the connection is closed or there's an error
+                    break
+                self.online_asr_proc.insert_audio_chunk(audio)
+                result = self.online_asr_proc.process_iter()
+                formatted_transcript = self.format_output_transcript(result)
+                await self.send_result(formatted_transcript)
+        except Exception as e:
+            print(f"Error during processing: {e}")
+        finally:
+            print("Processing completed.")
 
-    def receive_audio_chunk(self):
-        # receive all audio that is available by this time
-        # blocks operation if less than self.min_chunk seconds is available
-        # unblocks if connection is closed or a chunk is available
-        out = []
-        while sum(len(x) for x in out) < self.min_chunk * SAMPLING_RATE:
-            raw_bytes = self.connection.non_blocking_receive_audio()
-            if not raw_bytes:
-                break
-            sf = soundfile.SoundFile(
-                io.BytesIO(raw_bytes),
-                channels=1,
-                endian="LITTLE",
-                samplerate=SAMPLING_RATE,
-                subtype="PCM_16",
-                format="RAW",
-            )
-            audio, _ = librosa.load(sf, sr=SAMPLING_RATE, dtype=np.float32)
-            out.append(audio)
-        if not out:
-            return None
-        return np.concatenate(out)
-
-    def format_output_transcript(self, o):
-        # output format in stdout is like:
-        # 0 1720 Takhle to je
-        # - the first two words are:
-        #    - beg and end timestamp of the text segment, as estimated by Whisper model. The timestamps are not accurate, but they're useful anyway
-        # - the next words: segment transcript
-
-        # This function differs from whisper_online.output_transcript in the following:
-        # succeeding [beg,end] intervals are not overlapping because ELITR protocol (implemented in online-text-flow events) requires it.
-        # Therefore, beg, is max of previous end and current beg outputed by Whisper.
-        # Usually it differs negligibly, by appx 20 ms.
-
-        if o[0] is not None:
-            beg, end = o[0] * 1000, o[1] * 1000
+    def format_output_transcript(self, transcript_data):
+        """Formats the output transcript to ensure proper display or further processing."""
+        if transcript_data and transcript_data[2]:  # Check if there is actual text to format
+            beg, end, text = transcript_data
             if self.last_end is not None:
                 beg = max(beg, self.last_end)
-
             self.last_end = end
-            print("%1.0f %1.0f %s" % (beg, end, o[2]), flush=True, file=sys.stderr)
-            return "%1.0f %1.0f %s" % (beg, end, o[2])
+            return f"{beg:.3f} {end:.3f} {text}"
         else:
-            logger.debug("No text in this segment")
             return None
 
-    def send_result(self, o):
-        msg = self.format_output_transcript(o)
-        if msg is not None:
-            self.connection.send(msg)
-
-    def process(self):
-        # handle one client connection
-        self.online_asr_proc.init()
-        while True:
-            a = self.receive_audio_chunk()
-            if a is None:
-                break
-            self.online_asr_proc.insert_audio_chunk(a)
-            o = online.process_iter()
-            try:
-                self.send_result(o)
-            except BrokenPipeError:
-                logger.info("broken pipe -- connection closed?")
-                break
+    async def send_result(self, formatted_transcript):
+        """Sends the formatted transcript result to the client via WebSocket."""
+        if formatted_transcript:
+            await self.connection.send(formatted_transcript)
 
 
 #        o = online.finish()  # this should be working
