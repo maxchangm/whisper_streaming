@@ -10,12 +10,41 @@ import numpy as np
 logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser()
 
+# server options
+parser.add_argument("--host", type=str, default='localhost')
+parser.add_argument("--port", type=int, default=43007)
+parser.add_argument("--warmup-file", type=str, dest="warmup_file", 
+        help="The path to a speech audio wav file to warm up Whisper so that the very first chunk processing is fast. It can be e.g. https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav .")
+
+
+# options from whisper_online
+add_shared_args(parser)
+args = parser.parse_args()
+
+set_logging(args,logger,other="")
+
+# setting whisper object by args 
+
 SAMPLING_RATE = 16000
 
-asr = FasterWhisperASR(lan="yue", modelsize="large-v2")
-online = OnlineASRProcessor(asr)
-min_chunk = 1
+size = args.model
+language = args.lan
+asr, online = asr_factory(args)
+min_chunk = args.min_chunk_size
 
+# warm up the ASR because the very first transcribe takes more time than the others. 
+# Test results in https://github.com/ufal/whisper_streaming/pull/81
+msg = "Whisper is not warmed up. The first chunk processing may take longer."
+if args.warmup_file:
+    if os.path.isfile(args.warmup_file):
+        a = load_audio_chunk(args.warmup_file,0,1)
+        asr.transcribe(a)
+        logger.info("Whisper is warmed up.")
+    else:
+        logger.critical("The warm up file is not available. "+msg)
+        sys.exit(1)
+else:
+    logger.warning(msg)
 
 
 ######### Server objects
@@ -23,17 +52,8 @@ min_chunk = 1
 import line_packet
 import socket
 
-#  comments for Connection class
-#  it wraps conn object
-#  PACKET_SIZE is the size of the packet that is sent to the client
-#  send method sends the line to the client, but it doesn't send the same line twice, because it was problematic in online-text-flow-events
-#  receive_lines method receives the lines from the client
-#  non_blocking_receive_audio method receives the audio from the client
-
-
 class Connection:
-    """it wraps conn object"""
-
+    '''it wraps conn object'''
     PACKET_SIZE = 65536
 
     def __init__(self, conn):
@@ -43,7 +63,7 @@ class Connection:
         self.conn.setblocking(True)
 
     def send(self, line):
-        """it doesn't send the same line twice, because it was problematic in online-text-flow-events"""
+        '''it doesn't send the same line twice, because it was problematic in online-text-flow-events'''
         if line == self.last_line:
             return
         line_packet.send_one_line(self.conn, line)
@@ -61,8 +81,7 @@ class Connection:
 import io
 import soundfile
 
-
-# wraps socket and ASR object, and serves one client connection.
+# wraps socket and ASR object, and serves one client connection. 
 # next client should be served by a new instance of this object
 class ServerProcessor:
 
@@ -78,25 +97,18 @@ class ServerProcessor:
         # blocks operation if less than self.min_chunk seconds is available
         # unblocks if connection is closed or a chunk is available
         out = []
-        while sum(len(x) for x in out) < self.min_chunk * SAMPLING_RATE:
+        while sum(len(x) for x in out) < self.min_chunk*SAMPLING_RATE:
             raw_bytes = self.connection.non_blocking_receive_audio()
             if not raw_bytes:
                 break
-            sf = soundfile.SoundFile(
-                io.BytesIO(raw_bytes),
-                channels=1,
-                endian="LITTLE",
-                samplerate=SAMPLING_RATE,
-                subtype="PCM_16",
-                format="RAW",
-            )
-            audio, _ = librosa.load(sf, sr=SAMPLING_RATE, dtype=np.float32)
+            sf = soundfile.SoundFile(io.BytesIO(raw_bytes), channels=1,endian="LITTLE",samplerate=SAMPLING_RATE, subtype="PCM_16",format="RAW")
+            audio, _ = librosa.load(sf,sr=SAMPLING_RATE,dtype=np.float32)
             out.append(audio)
         if not out:
             return None
         return np.concatenate(out)
 
-    def format_output_transcript(self, o):
+    def format_output_transcript(self,o):
         # output format in stdout is like:
         # 0 1720 Takhle to je
         # - the first two words are:
@@ -109,13 +121,13 @@ class ServerProcessor:
         # Usually it differs negligibly, by appx 20 ms.
 
         if o[0] is not None:
-            beg, end = o[0] * 1000, o[1] * 1000
+            beg, end = o[0]*1000,o[1]*1000
             if self.last_end is not None:
                 beg = max(beg, self.last_end)
 
             self.last_end = end
-            print("%1.0f %1.0f %s" % (beg, end, o[2]), flush=True, file=sys.stderr)
-            return "%1.0f %1.0f %s" % (beg, end, o[2])
+            print("%1.0f %1.0f %s" % (beg,end,o[2]),flush=True,file=sys.stderr)
+            return "%1.0f %1.0f %s" % (beg,end,o[2])
         else:
             logger.debug("No text in this segment")
             return None
@@ -140,22 +152,24 @@ class ServerProcessor:
                 logger.info("broken pipe -- connection closed?")
                 break
 
-
 #        o = online.finish()  # this should be working
 #        self.send_result(o)
 
 
+
 # server loop
 
-# with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-#     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#     s.listen(1)
-#     while True:
-#         conn, addr = s.accept()
-#         logger.info("Connected to client on {}".format(addr))
-#         connection = Connection(conn)
-#         proc = ServerProcessor(connection, online, min_chunk)
-#         proc.process()
-#         conn.close()
-#         logger.info("Connection to client closed")
-# logger.info("Connection closed, terminating.")
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind((args.host, args.port))
+    s.listen(1)
+    logger.info('Listening on'+str((args.host, args.port)))
+    while True:
+        conn, addr = s.accept()
+        logger.info('Connected to client on {}'.format(addr))
+        connection = Connection(conn)
+        proc = ServerProcessor(connection, online, min_chunk)
+        proc.process()
+        conn.close()
+        logger.info('Connection to client closed')
+logger.info('Connection closed, terminating.')
